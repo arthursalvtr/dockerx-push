@@ -1,0 +1,89 @@
+#!/bin/bash
+# A simple docker push to local repository script
+# usage: docker-push -p|--port [YOU_PORT_HERE] -s|--server [YOUR_SERVER_HERE]
+
+localServer="localhost"
+port=5000
+tag=""
+daemonFile="/etc/docker/daemon.json"
+display_usage() { 
+	echo -e "Push given image to a repository server \n"
+	echo -e "Usage:\n$0 <saved_image> [--push]\n" 
+	echo -e " <saved_image>\t\t\t The image to push to local Repository. It will automatically pull when image is not found locally" 
+	echo -e " -p [--port]\t\t\t Reposityr port. Default: ${port}" 	
+	echo -e " -s [--server]\t\t\t Reposityr server. Default: ${localServer}" 	
+	echo -e " -t [--tag]\t\t\t Retag the image. By default it will always use the same tag from docker hub" 	
+	echo -e " -h [--Help]\t\t\t Display Help" 	
+	echo -e "\nExample: $0 mysql:8.0 -p ${port} -s ${localServer} -t my-local-mysql:8.0-local"
+}
+report_error() {
+    echo -e "Invalid option: "
+}
+# Check params
+if [  $# -le 0 ] 
+then 
+	display_usage
+	exit 1
+fi
+
+while getopts p:s:t:h option
+do
+    case "${option}" in
+        p) port=${OPTARG};;
+        s) localServer=${OPTARG};;
+        t) tag=${OPTARG};;
+        h) display_usage
+            exit;;
+        \?)  echo -e "\nInvalid option: -${OPTARG}" >&2
+            exit;;
+    esac
+done
+image=${*: -1:1}
+echo -e "\nLooking for $image locally..."
+if [[ "$(docker images -q $image 2> /dev/null)" == "" ]]; then
+echo -e "\nImage $image does not exists locally"
+echo -e "\nPulling $image from docker hub..."
+docker pull $image
+else
+echo -e "\nImage $image Found"
+fi
+
+if [ -z "$tag" ]; then
+tag=$image
+fi
+
+echo -e "\nPushing to repository server"
+docker tag $image ${localServer}:${port}/$tag
+docker push ${localServer}:${port}/$tag
+if [ $? -ne 0 ]; then
+    echo -e "\nWhitelisting ${localServer}:${port} to $daemonFile"
+    jq --version > /dev/null 2>&1; jq=$?;
+    if [ $jq -ne 0 ]; then
+        echo "Installing jq..."
+        apt-get install jq -y > /dev/null 2>&1; is_ubuntu=$?;
+        if [ $is_ubuntu -ne 0 ]; then
+            yum install jq -y > /dev/null 2>&1; is_centos=$?;
+        else
+            echo -e "\nPlease add this following to $daemonFile"
+            echo "{ \"insecure-registries\":[ \"${localServer}:${port}\" ] }"
+        fi
+    else
+        echo "continue modify json"
+        cat $daemonFile > /dev/null 2>&1; is_exists=$?;
+        if [ $is_exists -ne 0 ]; then
+            echo -e "\nCreating daemon.json"
+            touch $daemonFile
+            echo '{ "insecure-registries":[] }' | jq '.' > /etc/docker/daemon.json
+        fi
+        echo -e "\nCurrent daemon.json"
+        cat $daemonFile
+        echo -e "\nWriting daemon.json"
+        cat $daemonFile | jq '."insecure-registries" += ["'${localServer}':'${port}'"]'
+        cat $daemonFile | jq '."insecure-registries" += ["'${localServer}':'${port}'"]' > /etc/docker/temp-daemon.json 
+        rm $daemonFile && mv /etc/docker/temp-daemon.json $daemonFile
+        echo -e "\nRestarting docker"
+        systemctl restart docker
+        echo -e "\nTrying to push to repository"
+        docker push ${localServer}:${port}/$tag
+    fi
+fi
