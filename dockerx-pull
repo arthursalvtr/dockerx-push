@@ -1,21 +1,17 @@
 #!/bin/bash
-# A simple docker push to local repository script
+# A simple docker pull local repository script
 
 localServer="localhost"
 port=5000
-tag=""
-remove_image=0
 daemonFile="/etc/docker/daemon.json"
 display_usage() { 
-	echo -e "Push given image to a repository server \n"
+	echo -e "Pull given image to a repository server \n"
 	echo -e "Usage:\n$0 [options] <saved_image>\n" 
-	echo -e " <saved_image>\t\t\t The image to push to local Repository. It will automatically pull when image is not found locally" 
+	echo -e " <saved_image>\t\t\t The image to pull from Repository" 
 	echo -e " -p [--port]\t\t\t Reposityr port. Default: ${port}" 	
 	echo -e " -s [--server]\t\t\t Reposityr server. Default: ${localServer}" 	
-	echo -e " -t [--tag]\t\t\t Retag the image. By default it will always use the same tag from docker hub" 	
-	echo -e " -y [--Help]\t\t\t Remove Image after push" 	
 	echo -e " -h [--Help]\t\t\t Display Help" 	
-	echo -e "\nExample: $0 -p ${port} -s ${localServer} -t my-local-mysql:8.0-local mysql:8.0"
+	echo -e "\nExample: $0 -p ${port} -s ${localServer} mysql:8.0"
 }
 
 # Check params
@@ -24,14 +20,11 @@ then
 	display_usage
 	exit 1
 fi
-
-while getopts p:s:t:hy option
+while getopts p:s:t:h option
 do
     case "${option}" in
         p) port=${OPTARG};;
         s) localServer=${OPTARG};;
-        t) tag=${OPTARG};;
-        y) remove_image=1;;
         h) display_usage
             exit;;
         \?)  echo -e "\nInvalid option: -${OPTARG}" >&2
@@ -39,22 +32,8 @@ do
     esac
 done
 image=${*: -1:1}
-echo -e "\nLooking for $image locally..."
-if [[ "$(docker images -q $image 2> /dev/null)" == "" ]]; then
-echo -e "\nImage $image does not exists locally"
-echo -e "\nPulling $image from docker hub..."
-docker pull $image
-else
-echo -e "\nImage $image Found"
-fi
-
-if [ -z "$tag" ]; then
-tag=$image
-fi
-
-echo -e "\nPushing to repository server"
-docker tag $image ${localServer}:${port}/$tag
-docker push ${localServer}:${port}/$tag
+echo -e "\nPulling from repository server"
+docker pull ${localServer}:${port}/$image
 if [ $? -ne 0 ]; then
     echo -e "\nWhitelisting ${localServer}:${port} to $daemonFile"
     jq --version > /dev/null 2>&1; jq=$?;
@@ -66,6 +45,7 @@ if [ $? -ne 0 ]; then
         else
             echo -e "\nPlease add this following to $daemonFile"
             echo "{ \"insecure-registries\":[ \"${localServer}:${port}\" ] }"
+            echo -e "\nPulling failed..."
         fi
     else
         echo "Updating $daemonFile"
@@ -83,24 +63,7 @@ if [ $? -ne 0 ]; then
         rm $daemonFile && mv /etc/docker/temp-daemon.json $daemonFile
         echo -e "\nRestarting docker"
         systemctl restart docker
-        echo -e "\nTrying to push to repository"
-        docker push ${localServer}:${port}/$tag
+        echo -e "\nTrying to pull from repository"
+        docker pull ${localServer}:${port}/$image
     fi
-fi
-
-if [ $remove_image -eq 1 ]; then
-    echo -e "\nRemoving Image..."
-    echo -e "\n "
-    docker image remove $image
-    docker image remove ${localServer}:${port}/$tag
-exit
-fi
-
-read -p "Do you want to remove local image for $image ? [y/n]" -n 1 -r
-if [[ $REPLY =~ ^[Yy]$ ]]
-then
-    echo -e "\nRemoving Image..."
-    echo -e "\n "
-    docker image remove $image
-    docker image remove ${localServer}:${port}/$tag
 fi
